@@ -1,0 +1,1 @@
+web: cd backend && python manage.py migrate --settings=muk_support_backend.settings_railway && python manage.py collectstatic --noinput --settings=muk_support_backend.settings_railway && gunicorn muk_support_backend.wsgi:application --log-file - 
