@@ -1,13 +1,16 @@
 import axios from 'axios';
 
-const API_URL = 'http://localhost:8000/api'; // Update this with your Django backend URL
+// const API_URL = 'http://localhost:8000/api'; // Update this with your Django backend URL
+const API_BASE_URL = "https://amnamara.pythonanywhere.com/api";
 
 // Create axios instance with default config
 const api = axios.create({
-  baseURL: API_URL,
+  baseURL: API_BASE_URL,
   headers: {
     'Content-Type': 'application/json',
   },
+  withCredentials: true, // Important for CORS with credentials
+  timeout: 30000, // 30 second timeout
 });
 
 // Add token to requests if it exists
@@ -54,8 +57,24 @@ api.interceptors.response.use(
 
 // Auth services
 export const login = async (credentials) => {
-  const response = await api.post('/users/login/', credentials);
-  return response.data;
+  console.log('Attempting login with:', credentials.email);
+  try {
+    console.log('Login API URL:', `${API_BASE_URL}/users/login/`);
+    const response = await api.post('/users/login/', credentials);
+    console.log('Login successful. Response:', response.data);
+    return response.data;
+  } catch (error) {
+    console.error('Login failed:', error.message);
+    console.error('Full error object:', error);
+    if (error.response) {
+      console.error('Error response data:', error.response.data);
+      console.error('Error response status:', error.response.status);
+      console.error('Error response headers:', error.response.headers);
+    } else if (error.request) {
+      console.error('No response received:', error.request);
+    }
+    throw error;
+  }
 };
 
 export const logout = async () => {
