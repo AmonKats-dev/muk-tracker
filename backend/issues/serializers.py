@@ -10,12 +10,10 @@ from users.models import User
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ['user_id', 'username', 'email', 'full_name']
+        fields = ['user_id', 'username', 'email', 'full_name', 'user_type']
 
 
 class CategorySerializer(serializers.ModelSerializer):
-    college_name = serializers.CharField(source='college.college_name', read_only=True)
-    
     class Meta:
         model = Category
         fields = '__all__'
@@ -76,10 +74,22 @@ class NotificationSerializer(serializers.ModelSerializer):
 class IssueListSerializer(serializers.ModelSerializer):
     reporter_details = UserSerializer(source='reporter', read_only=True)
     assignee_details = UserSerializer(source='assignee', read_only=True)
-    category_name = serializers.CharField(source='category.name', read_only=True)
-    priority_name = serializers.CharField(source='priority.name', read_only=True)
-    status_name = serializers.CharField(source='status.name', read_only=True)
-    college_name = serializers.CharField(source='college.college_name', read_only=True)
+    category_name = serializers.SerializerMethodField()
+    priority_name = serializers.SerializerMethodField()
+    status_name = serializers.SerializerMethodField()
+    college_name = serializers.SerializerMethodField()
+    
+    def get_category_name(self, obj):
+        return obj.category.name if obj.category else None
+    
+    def get_priority_name(self, obj):
+        return obj.priority.name if obj.priority else None
+    
+    def get_status_name(self, obj):
+        return obj.status.name if obj.status else None
+    
+    def get_college_name(self, obj):
+        return obj.college.college_name if obj.college else None
     
     class Meta:
         model = Issue
@@ -114,15 +124,16 @@ class IssueDetailSerializer(serializers.ModelSerializer):
 
 class IssueSerializer(serializers.ModelSerializer):
     reporter = UserSerializer(read_only=True)
-    assignee = UserSerializer(read_only=True)
+    assignee_details = UserSerializer(source='assignee', read_only=True)
     category_name = serializers.CharField(source='category.name', read_only=True)
     priority_name = serializers.CharField(source='priority.name', read_only=True)
     status_name = serializers.CharField(source='status.name', read_only=True)
     category = serializers.PrimaryKeyRelatedField(queryset=Category.objects.all(), required=False)
     priority = serializers.PrimaryKeyRelatedField(queryset=Priority.objects.all(), required=False)
     status = serializers.PrimaryKeyRelatedField(queryset=Status.objects.all(), required=False)
+    assignee = serializers.PrimaryKeyRelatedField(queryset=User.objects.all(), required=False, allow_null=True)
 
     class Meta:
         model = Issue
         fields = '__all__'
-        read_only_fields = ('created_at', 'updated_at', 'resolved_at', 'category_name', 'priority_name', 'status_name') 
+        read_only_fields = ('created_at', 'updated_at', 'resolved_at', 'category_name', 'priority_name', 'status_name', 'assignee_details') 

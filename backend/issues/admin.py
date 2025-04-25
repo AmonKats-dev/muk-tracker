@@ -6,8 +6,8 @@ from .models import (
 
 
 class CategoryAdmin(admin.ModelAdmin):
-    list_display = ('name', 'is_active', 'college')
-    list_filter = ('is_active', 'college')
+    list_display = ('name', 'is_active')
+    list_filter = ('is_active',)
     search_fields = ('name', 'description')
 
 

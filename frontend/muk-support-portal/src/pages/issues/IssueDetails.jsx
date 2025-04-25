@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
-import { getIssueById } from '../../services/api';
+import { getIssueById, getIssueComments, postComment } from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
 import {
   ArrowLeftIcon,
@@ -21,7 +21,7 @@ function IssueDetails() {
   const { issueId } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
-  const { logout } = useAuth();
+  const { user, logout } = useAuth();
   const isStudentView = location.pathname.includes('/student/');
   const isLecturerView = location.pathname.includes('/lecturer/');
   
@@ -34,20 +34,41 @@ function IssueDetails() {
   const [showResolveModal, setShowResolveModal] = useState(false);
   const [showCloseModal, setShowCloseModal] = useState(false);
   const [error, setError] = useState('');
+  const [commentError, setCommentError] = useState('');
 
   useEffect(() => {
     const fetchIssueDetails = async () => {
       setLoading(true);
+      setComments([]); // Reset comments when fetching new issue
       try {
         console.log('Fetching issue with ID:', issueId);
+        console.log('Current user:', user);
+        console.log('Auth token:', localStorage.getItem('access'));
+        
+        // First fetch the issue details
         const issueData = await getIssueById(issueId);
         console.log('Issue data received:', issueData);
         
         if (issueData) {
           setIssue(issueData);
-          // If comments are included in the response, set them
-          if (issueData.comments) {
-            setComments(issueData.comments);
+          
+          // Then try to fetch comments
+          try {
+            console.log('Fetching comments for issue:', issueId);
+            const commentsData = await getIssueComments(issueId);
+            console.log('Comments data received:', commentsData);
+            if (Array.isArray(commentsData)) {
+              setComments(commentsData);
+            } else {
+              console.error('Comments data is not an array:', commentsData);
+              setComments([]);
+            }
+          } catch (commentsError) {
+            console.error('Error fetching comments:', commentsError);
+            console.error('Comments error response:', commentsError.response?.data);
+            console.error('Comments error status:', commentsError.response?.status);
+            console.error('Comments error headers:', commentsError.response?.headers);
+            setComments([]);
           }
         } else {
           setError('Issue not found');
@@ -55,12 +76,19 @@ function IssueDetails() {
         }
       } catch (error) {
         console.error('Error fetching issue details:', error);
+        console.error('Error response:', error.response?.data);
+        console.error('Error status:', error.response?.status);
+        console.error('Error headers:', error.response?.headers);
         
-        if (error.message === 'Unauthorized') {
+        if (error.response?.status === 401) {
+          console.log('Unauthorized error detected, logging out...');
           await logout();
           navigate('/login', { state: { from: location.pathname } });
+        } else if (error.response?.status === 404) {
+          setError('Issue not found');
+          navigate(isStudentView ? '/student/issues' : '/lecturer/issues', { replace: true });
         } else {
-          setError('Failed to load issue details');
+          setError(`Failed to load issue details: ${error.response?.data?.message || error.message}`);
         }
       } finally {
         setLoading(false);
@@ -70,7 +98,7 @@ function IssueDetails() {
     if (issueId) {
       fetchIssueDetails();
     }
-  }, [issueId, navigate, isStudentView, location.pathname, logout]);
+  }, [issueId, navigate, isStudentView, location.pathname, logout, user]);
 
   const updateIssueStatus = (newStatus) => {
     // In a real app, this would be an API call
@@ -168,20 +196,32 @@ function IssueDetails() {
     setShowCloseModal(false);
   };
 
-  const addComment = () => {
+  const addComment = async () => {
     if (!newComment.trim()) return;
+    setCommentError('');
 
-    // Add the new comment
-    const newCommentObj = {
-      id: comments.length + 1,
-      user: isStudentView ? 'John Smith' : 'Dr. Sarah Wilson', // This would be the current user in a real app
-      role: isStudentView ? 'student' : 'lecturer',
-      timestamp: new Date().toLocaleString(),
-      content: newComment
-    };
-    
-    setComments(prevComments => [...prevComments, newCommentObj]);
-    setNewComment('');
+    try {
+      console.log('Posting comment for issue:', issueId);
+      console.log('Comment data:', { content: newComment, is_internal: false });
+      
+      const commentData = {
+        content: newComment,
+        is_internal: false
+      };
+
+      const response = await postComment(issueId, commentData);
+      console.log('Comment posted successfully:', response);
+      
+      // Add the new comment to the list
+      setComments(prevComments => [...prevComments, response]);
+      setNewComment('');
+    } catch (error) {
+      console.error('Error posting comment:', error);
+      console.error('Comment error response:', error.response?.data);
+      console.error('Comment error status:', error.response?.status);
+      console.error('Comment error headers:', error.response?.headers);
+      setCommentError('Failed to post comment. Please try again.');
+    }
   };
 
   if (loading) {
@@ -360,63 +400,87 @@ function IssueDetails() {
 
         {/* Content */}
         <div className="px-6 py-4">
-          <div className="grid grid-cols-3 gap-6">
-          {/* Main Content */}
-            <div className="col-span-2">
+          <div className="flex flex-row gap-6">
+            {/* Main Content */}
+            <div className="flex-1">
               <div className="space-y-6">
                 <div>
                   <h2 className="text-lg font-medium text-gray-900">Description</h2>
                   <p className="mt-2 text-gray-600">{issue.description}</p>
-            </div>
+                </div>
 
                 {/* Comments Section */}
-                <div>
-                  <h2 className="text-lg font-medium text-gray-900 flex items-center">
-                    <ChatBubbleLeftIcon className="h-5 w-5 mr-2" />
-                    Comments ({comments.length})
-                  </h2>
-                  <div className="mt-2 space-y-4">
-                {comments.map((comment) => (
-                      <div 
-                        key={comment.id} 
-                        className={`rounded-lg p-4 ${
-                          comment.role === 'student' ? 'bg-blue-50 border-l-4 border-blue-300' : 'bg-gray-50 border-l-4 border-gray-300'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between">
-                          <span className="font-medium text-gray-900 flex items-center">
-                            <UserCircleIcon className="h-5 w-5 mr-2" />
-                            {comment.user} 
-                            <span className="ml-2 text-xs px-2 py-1 rounded-full bg-gray-200 text-gray-800">
-                              {comment.role === 'student' ? 'Student' : 'Staff'}
-                            </span>
-                          </span>
-                          <span className="text-sm text-gray-500">{comment.timestamp}</span>
-                        </div>
-                        <p className="mt-2 text-gray-600">{comment.content}</p>
-                      </div>
-                    ))}
+                <div className="mt-8">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-lg font-medium text-gray-900">Comments</h3>
                   </div>
-              </div>
+                  
+                  {commentError && (
+                    <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-md">
+                      <p className="text-sm text-red-600">{commentError}</p>
+                    </div>
+                  )}
 
-                {/* Add Comment Section */}
-                <div>
-                  <h2 className="text-lg font-medium text-gray-900">Add Comment</h2>
-                  <div className="mt-2">
-                  <textarea
-                      rows="4"
-                    value={newComment}
-                    onChange={(e) => setNewComment(e.target.value)}
-                      className="w-full border border-gray-300 rounded-lg p-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      placeholder="Type your comment here..."
-                  />
-                  <button
-                      onClick={addComment}
-                      className="mt-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 flex items-center"
-                  >
-                      <PaperAirplaneIcon className="h-5 w-5 mr-2" />
-                    Post Comment
-                  </button>
+                  <div className="mt-4">
+                    <div className="flex space-x-3">
+                      <div className="flex-shrink-0">
+                        <UserCircleIcon className="h-8 w-8 text-gray-400" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="border border-gray-300 rounded-lg shadow-sm overflow-hidden">
+                          <div className="p-4">
+                            <textarea
+                              rows={3}
+                              value={newComment}
+                              onChange={(e) => setNewComment(e.target.value)}
+                              className="block w-full border-0 p-0 text-gray-900 placeholder-gray-500 focus:ring-0 sm:text-sm"
+                              placeholder="Add a comment..."
+                            />
+                          </div>
+                          <div className="bg-gray-50 px-4 py-3 flex justify-end">
+                            <button
+                              type="button"
+                              onClick={addComment}
+                              className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                            >
+                              <PaperAirplaneIcon className="h-4 w-4 mr-2" />
+                              Post Comment
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="mt-6 space-y-6">
+                    {Array.isArray(comments) && comments.length > 0 ? (
+                      comments.map((comment) => (
+                        <div key={`comment-${comment.comment_id}`} className="flex space-x-3">
+                          <div className="flex-shrink-0">
+                            <UserCircleIcon className="h-8 w-8 text-gray-400" />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="bg-white rounded-lg shadow-sm p-4">
+                              <div className="flex items-center justify-between">
+                                <p className="text-sm font-medium text-gray-900">
+                                  {comment.user_details?.full_name || 'Anonymous'}
+                                </p>
+                                <p className="text-sm text-gray-500">
+                                  {new Date(comment.created_at).toLocaleString()}
+                                </p>
+                              </div>
+                              <p className="mt-2 text-sm text-gray-700">
+                                {comment.content}
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="text-center text-gray-500 py-4">
+                        No comments yet. Be the first to comment!
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -457,152 +521,6 @@ function IssueDetails() {
                     </div>
                   </>
                 )}
-            </div>
-          </div>
-
-          {/* Sidebar */}
-            <div className="space-y-6">
-              {/* Issue Actions - Only visible to staff */}
-              {!isStudentView && (
-                <div>
-                  <h2 className="text-sm font-medium text-gray-500 mb-3">Actions</h2>
-                  <div className="space-y-3">
-                    {/* Status dropdown */}
-                    <div className="relative">
-                      <button 
-                        onClick={() => setStatusDropdownOpen(!statusDropdownOpen)}
-                        className="w-full flex justify-between items-center px-4 py-2 border border-gray-300 rounded-md shadow-sm bg-white text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-                      >
-                        <span>Change Status</span>
-                        <svg className="ml-2 -mr-1 h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                          <path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" />
-                        </svg>
-                      </button>
-                      
-                      {statusDropdownOpen && (
-                        <div className="origin-top-right absolute right-0 mt-2 w-full rounded-md shadow-lg bg-white ring-1 ring-black ring-opacity-5 focus:outline-none z-10">
-                          <div className="py-1" role="menu" aria-orientation="vertical">
-                            <button
-                                onClick={() => updateIssueStatus('Open')}
-                                className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
-                                role="menuitem"
-                              >
-                              Open
-                            </button>
-                            <button
-                                onClick={() => updateIssueStatus('In Progress')}
-                                className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
-                                role="menuitem"
-                              >
-                              In Progress
-                            </button>
-                            <button
-                                onClick={() => updateIssueStatus('Pending')}
-                                className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
-                                role="menuitem"
-                              >
-                                Pending
-                              </button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                    
-                    {/* Resolve button - updated to show "Resolved" when disabled */}
-                    <button
-                      onClick={handleResolveIssue}
-                      disabled={issue.status === 'Resolved' || issue.status === 'Closed'}
-                      className={`w-full flex items-center justify-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium 
-                        ${issue.status === 'Resolved' || issue.status === 'Closed'
-                          ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                          : 'text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500'
-                  }`}
-                >
-                  <CheckCircleIcon className="h-5 w-5 mr-2" />
-                        {issue.status === 'Resolved' ? 'Resolved' : 'Resolve Issue'}
-                      </button>
-                      
-                    {/* Close button - updated to show "Closed" when disabled */}
-                    <button
-                      onClick={handleCloseIssue}
-                      disabled={issue.status === 'Closed'}
-                      className={`w-full flex items-center justify-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium 
-                        ${issue.status === 'Closed'
-                          ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                          : 'text-white bg-gray-600 hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500'
-                        }`}
-                    >
-                      {issue.status === 'Closed' ? 'Closed' : 'Close Issue'}
-                </button>
-              </div>
-            </div>
-              )}
-
-              {/* Issue Details */}
-              <div>
-                <h2 className="text-sm font-medium text-gray-500 mb-3">Details</h2>
-                <div className="space-y-3">
-                  <div className="flex items-start">
-                    <ClockIcon className="h-5 w-5 text-gray-400 mr-2" />
-                    <div>
-                      <p className="text-xs text-gray-500">Created</p>
-                      <p className="text-sm font-medium text-gray-900">{issue.createdAt}</p>
-                    </div>
-                  </div>
-                  <div className="flex items-start">
-                    <UserIcon className="h-5 w-5 text-gray-400 mr-2" />
-                    <div>
-                      <p className="text-xs text-gray-500">Student</p>
-                      <p className="text-sm font-medium text-gray-900">{issue.student}</p>
-                    </div>
-                  </div>
-                  <div className="flex items-start">
-                    <TagIcon className="h-5 w-5 text-gray-400 mr-2" />
-                    <div>
-                      <p className="text-xs text-gray-500">Category</p>
-                      <p className="text-sm font-medium text-gray-900">{issue.category}</p>
-                    </div>
-                  </div>
-                  <div className="flex items-start">
-                    <TagIcon className="h-5 w-5 text-gray-400 mr-2" />
-                    <div>
-                      <p className="text-xs text-gray-500">Priority</p>
-                      <p className={`text-sm font-medium ${
-                        issue.priority === 'Critical' ? 'text-red-700' :
-                        issue.priority === 'High' ? 'text-orange-700' :
-                        issue.priority === 'Medium' ? 'text-yellow-700' :
-                        'text-green-700'
-                      }`}>{issue.priority}</p>
-                      {isStudentView && (
-                        <div className="text-xs text-gray-500 mt-1 bg-blue-50 p-2 rounded border border-blue-100">
-                          <p className="mb-1">Priority was automatically assigned based on issue category:</p>
-                          <ul className="list-disc pl-4">
-                            <li><span className="font-medium">Academic</span> issues receive <span className="font-medium text-orange-700">High</span> priority</li>
-                            <li><span className="font-medium">Administrative</span> issues receive <span className="font-medium text-red-700">Critical</span> priority</li>
-                            {issue.category === 'Technical Support' && (
-                              <li><span className="font-medium">Technical Support</span> issues receive <span className="font-medium text-orange-700">High</span> priority</li>
-                            )}
-                            {issue.category === 'Registration' && (
-                              <li><span className="font-medium">Registration</span> issues receive <span className="font-medium text-yellow-700">Medium</span> priority</li>
-                            )}
-                            {issue.category === 'General' && (
-                              <li><span className="font-medium">General</span> issues receive <span className="font-medium text-green-700">Low</span> priority</li>
-                            )}
-                          </ul>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                  <div className="flex items-start">
-                    <ClockIconSolid className="h-5 w-5 text-gray-400 mr-2" />
-                    <div>
-                      <p className="text-xs text-gray-500">SLA</p>
-                      <p className={`text-sm font-medium ${
-                        issue.sla === 'Urgent' ? 'text-red-600' : 'text-yellow-600'
-                      }`}>{issue.sla}</p>
-                    </div>
-                  </div>
-                </div>
               </div>
             </div>
           </div>

@@ -65,6 +65,7 @@ class User(AbstractBaseUser, PermissionsMixin):
         ('registrar', 'Registrar'),
         ('admin', 'Administrator')
     ])
+    verification_code = models.CharField(max_length=6, null=True, blank=True)
     
     objects = CustomUserManager()
     
@@ -73,12 +74,18 @@ class User(AbstractBaseUser, PermissionsMixin):
     
     def __str__(self):
         return f"{self.full_name} ({self.email})"
+    
+    def save(self, *args, **kwargs):
+        # Ensure username is set if not provided
+        if not self.username and self.email:
+            self.username = self.email.split('@')[0]
+        super().save(*args, **kwargs)
 
 
 class Student(models.Model):
     student_id = models.AutoField(primary_key=True)
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='student_profile')
-    student_number = models.IntegerField(unique=True, help_text="Unique student identifier number")
+    student_number = models.CharField(max_length=20, unique=True, help_text="Unique student identifier number")
     registration_number = models.CharField(max_length=20, unique=True, help_text="Registration/enrollment number")
     college = models.ForeignKey('academic.College', on_delete=models.CASCADE, related_name='students')
     department = models.ForeignKey('academic.Department', on_delete=models.CASCADE, 

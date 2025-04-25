@@ -26,9 +26,9 @@ class DepartmentAdmin(admin.ModelAdmin):
 
 
 class ProgramAdmin(admin.ModelAdmin):
-    list_display = ('program_name', 'degree_level', 'department', 'college', 'is_active')
-    list_filter = ('degree_level', 'college', 'department', 'is_active')
-    search_fields = ('program_name',)
+    list_display = ('program_name', 'code', 'department', 'college', 'duration', 'is_active')
+    list_filter = ('college', 'department', 'is_active')
+    search_fields = ('program_name', 'code')
 
 
 admin.site.register(College, CollegeAdmin)

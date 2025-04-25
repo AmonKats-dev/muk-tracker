@@ -30,6 +30,7 @@ function Issues() {
         // Log sample issue to inspect structure
         if (response.length > 0) {
           console.log('Sample issue structure:', response[0]);
+          console.log('Issue ID:', response[0].id || response[0].issue_id);
           console.log('Category type:', typeof response[0].category);
           console.log('Status type:', typeof response[0].status);
           console.log('Priority type:', typeof response[0].priority);
@@ -88,24 +89,22 @@ function Issues() {
     fetchIssues();
   }, [navigate, user, logout, location.state]);
 
-  const filteredIssues = issues.filter(issue => {
-    const matchesSearch = issue.title?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         issue.description?.toLowerCase().includes(searchTerm.toLowerCase());
-    
-    const statusName = issue.status_name || 
-                       (issue.status && typeof issue.status === 'object' ? issue.status.name : null);
-    
-    const categoryName = issue.category_name || 
-                        (issue.category && typeof issue.category === 'object' ? issue.category.name : null);
-    
-    const matchesStatus = filterStatus === 'all' || 
-                         (statusName && statusName.toLowerCase() === filterStatus);
-    
-    const matchesCategory = filterCategory === 'all' || 
-                           (categoryName === filterCategory);
-    
-    return matchesSearch && matchesStatus && matchesCategory;
-  });
+  const filteredIssues = (issues || [])
+    .filter(issue => {
+      if (!issue) return false;
+      
+      const matchesSearch = 
+        issue.title?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        issue.description?.toLowerCase().includes(searchTerm.toLowerCase());
+      
+      const matchesCategory = filterCategory === 'all' || 
+        (issue.category?.name || issue.category_name) === filterCategory;
+      const matchesStatus = filterStatus === 'all' || 
+        (issue.status?.name || issue.status_name) === filterStatus;
+
+      return matchesSearch && matchesCategory && matchesStatus;
+    })
+    .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 
   if (loading) {
     return (
@@ -316,12 +315,15 @@ function Issues() {
                           {new Date(issue.created_at).toLocaleString()}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-center text-sm font-medium">
-                          <Link 
-                            to={`/student/issues/${issue.issue_id}`} 
-                            className="inline-flex items-center justify-center px-3 py-1.5 border border-transparent text-xs font-medium rounded-md shadow-sm bg-blue-600 text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-                          >
-                            View
-                          </Link>
+                          <div className="flex items-center justify-center space-x-2">
+                            <Link 
+                              to={`/student/issues/${issue.id || issue.issue_id}`} 
+                              className="inline-flex items-center p-1.5 border border-transparent rounded-md shadow-sm text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500"
+                              title="View Issue"
+                            >
+                              <EyeIcon className="h-4 w-4" />
+                            </Link>
+                          </div>
                         </td>
                       </tr>
                     );

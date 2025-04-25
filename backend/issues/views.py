@@ -4,12 +4,15 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from rest_framework import status
-from .models import Issue, Category, Priority, Status, Attachment
+from django.db import models
+from .models import Issue, Category, Priority, Status, Attachment, Comment, Notification
 from .serializers import (
     IssueSerializer, CategorySerializer, PrioritySerializer, 
     StatusSerializer, AttachmentSerializer, IssueListSerializer,
-    IssueDetailSerializer
+    IssueDetailSerializer, CommentSerializer
 )
+from django.db.models import Case, When, F, Value
+from django.db.models.functions import Coalesce
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
@@ -38,10 +41,100 @@ def list_lecturer_issues(request):
     """
     List issues for lecturers (their own plus assigned)
     """
-    # Fetch issues where lecturer is reporter or assignee
-    issues = Issue.objects.filter(reporter=request.user) | Issue.objects.filter(assignee=request.user)
-    serializer = IssueListSerializer(issues, many=True)
-    return Response(serializer.data)
+    try:
+        print(f"Fetching issues for lecturer: {request.user.user_id}")
+        
+        # Base query for issues where lecturer is reporter or assignee
+        issues = Issue.objects.filter(reporter=request.user) | Issue.objects.filter(assignee=request.user)
+        
+        # Apply filters
+        priority = request.query_params.get('priority', None)
+        if priority:
+            try:
+                # Handle critical priority case
+                if priority.lower() == 'critical':
+                    # Get the highest priority level
+                    highest_priority = Priority.objects.order_by('-level').first()
+                    if highest_priority:
+                        print(f"Filtering for critical priority (level {highest_priority.level})")
+                        issues = issues.filter(priority=highest_priority)
+                        # Order by creation date for critical issues
+                        issues = issues.order_by('-created_at')
+                else:
+                    priority_obj = Priority.objects.get(name__iexact=priority)
+                    issues = issues.filter(priority=priority_obj)
+            except Priority.DoesNotExist:
+                print(f"Priority {priority} not found")
+                pass
+        
+        # Filter by assigned issues
+        assigned = request.query_params.get('assigned', None)
+        if assigned:
+            issues = issues.filter(assignee=request.user)
+        
+        # Filter by department issues
+        department = request.query_params.get('department', None)
+        if department and hasattr(request.user, 'department') and request.user.department:
+            try:
+                issues = issues.filter(college=request.user.department.college)
+            except AttributeError:
+                print("Department or college not accessible")
+                pass
+        
+        # Filter by resolved issues
+        resolved = request.query_params.get('resolved', None)
+        if resolved:
+            issues = issues.filter(status__name__iexact='resolved')
+        
+        # Apply ordering if specified
+        ordering = request.query_params.get('ordering', None)
+        if ordering:
+            try:
+                # Handle special case for resolved_at ordering
+                if ordering == '-resolved_at':
+                    # For resolved issues, order by resolved_at, for others use updated_at
+                    issues = issues.annotate(
+                        sort_date=Case(
+                            When(status__name__iexact='resolved', then=F('resolved_at')),
+                            default=F('updated_at'),
+                            output_field=models.DateTimeField(),
+                        )
+                    ).order_by('-sort_date')
+                else:
+                    issues = issues.order_by(ordering)
+            except Exception as e:
+                print(f"Error applying ordering: {e}")
+                # Fall back to default ordering
+                issues = issues.order_by('-priority__level', '-created_at')
+        else:
+            # Default ordering by priority level (critical first) and creation date
+            issues = issues.order_by('-priority__level', '-created_at')
+        
+        # Apply limit if specified (after ordering)
+        limit = request.query_params.get('limit', None)
+        if limit:
+            try:
+                limit = int(limit)
+                issues = issues[:limit]
+            except ValueError:
+                print(f"Invalid limit value: {limit}")
+                pass
+        
+        # Log the issues being returned
+        print(f"Found {issues.count()} issues for lecturer")
+        for issue in issues:
+            print(f"Issue {issue.issue_id}: assignee={issue.assignee}, reporter={issue.reporter}, priority={issue.priority.name if issue.priority else 'None'}")
+        
+        # Serialize the issues
+        serializer = IssueListSerializer(issues, many=True)
+        return Response(serializer.data)
+        
+    except Exception as e:
+        print(f"Error in list_lecturer_issues: {str(e)}")
+        return Response(
+            {"error": f"An error occurred while fetching issues: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
@@ -238,12 +331,101 @@ def update_issue(request, pk):
     """
     Update an issue
     """
-    issue = get_object_or_404(Issue, pk=pk)
-    serializer = IssueSerializer(issue, data=request.data, partial=True)
-    if serializer.is_valid():
-        serializer.save()
-        return Response(serializer.data)
-    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    try:
+        issue = get_object_or_404(Issue, pk=pk)
+        print(f"Updating issue {pk} with data: {request.data}")
+        
+        # Special handling for assignee updates
+        if 'assignee' in request.data:
+            assignee_id = request.data.get('assignee')
+            print(f"Assignee update requested. Raw value: {assignee_id!r}")
+            
+            # If empty string, None, or "null" string, clear the assignee
+            if assignee_id == "" or assignee_id is None or assignee_id == "null":
+                print("Clearing assignee")
+                issue.assignee = None
+            else:
+                # Try to find the user
+                from users.models import User
+                try:
+                    # Convert assignee_id to integer if it's a string
+                    if isinstance(assignee_id, str) and assignee_id.isdigit():
+                        assignee_id = int(assignee_id)
+                        
+                    print(f"Looking for user with ID: {assignee_id}")
+                    assignee = User.objects.get(user_id=assignee_id)
+                    print(f"Found assignee: {assignee.full_name} (ID: {assignee.user_id})")
+                    issue.assignee = assignee
+                except User.DoesNotExist:
+                    print(f"Assignee with ID {assignee_id} not found")
+                    return Response(
+                        {"error": f"User with ID {assignee_id} not found"}, 
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                except ValueError as e:
+                    print(f"Invalid assignee ID format: {assignee_id}, Error: {e}")
+                    return Response(
+                        {"error": f"Invalid assignee ID format: {assignee_id}"}, 
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+            
+            # Save the assignee change directly
+            issue.save(update_fields=['assignee'])
+            print(f"Assignee updated to: {issue.assignee}")
+        
+        # Special handling for status updates
+        if 'status' in request.data:
+            status_id = request.data.get('status')
+            print(f"Status update requested. Raw value: {status_id!r}")
+            
+            try:
+                # Convert status_id to integer if it's a string
+                if isinstance(status_id, str) and status_id.isdigit():
+                    status_id = int(status_id)
+                    
+                print(f"Looking for status with ID: {status_id}")
+                new_status = Status.objects.get(status_id=status_id)
+                print(f"Found status: {new_status.name} (ID: {new_status.status_id})")
+                
+                # Update resolved_at if status is terminal
+                if new_status.is_terminal and not issue.resolved_at:
+                    from django.utils import timezone
+                    issue.resolved_at = timezone.now()
+                    print(f"Setting resolved_at to: {issue.resolved_at}")
+                
+                issue.status = new_status
+                issue.save(update_fields=['status', 'resolved_at'])
+                print(f"Status updated to: {issue.status.name}")
+            except Status.DoesNotExist:
+                print(f"Status with ID {status_id} not found")
+                return Response(
+                    {"error": f"Status with ID {status_id} not found"}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            except ValueError as e:
+                print(f"Invalid status ID format: {status_id}, Error: {e}")
+                return Response(
+                    {"error": f"Invalid status ID format: {status_id}"}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        
+        # Process other fields with serializer
+        serializer = IssueDetailSerializer(issue, data=request.data, partial=True)
+        if serializer.is_valid():
+            updated_issue = serializer.save()
+            # Return the detailed representation
+            response = IssueDetailSerializer(updated_issue).data
+            print(f"Issue updated successfully with fields: {request.data.keys()}")
+            return Response(response)
+        else:
+            print(f"Validation errors: {serializer.errors}")
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        print(f"Error updating issue: {str(e)}")
+        return Response(
+            {"error": f"Failed to update issue: {str(e)}"}, 
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
 
 @api_view(['DELETE'])
 @permission_classes([IsAuthenticated])
@@ -285,6 +467,108 @@ def list_statuses(request):
     serializer = StatusSerializer(statuses, many=True)
     return Response(serializer.data)
 
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_category_distribution(request):
+    """
+    Get distribution of issues by category
+    """
+    try:
+        # Get time range from query params (default to 7 days)
+        time_range = int(request.query_params.get('time_range', 7))
+        
+        # Calculate the date threshold
+        from django.utils import timezone
+        from datetime import timedelta
+        threshold_date = timezone.now() - timedelta(days=time_range)
+        
+        # Get all categories
+        categories = Category.objects.all()
+        
+        # Initialize result list
+        distribution = []
+        
+        for category in categories:
+            # Count issues for this category within the time range
+            count = Issue.objects.filter(
+                category=category,
+                created_at__gte=threshold_date
+            ).count()
+            
+            distribution.append({
+                'category_id': category.category_id,
+                'category_name': category.name,
+                'count': count
+            })
+        
+        return Response({
+            'results': distribution
+        })
+        
+    except Exception as e:
+        return Response(
+            {"error": f"An error occurred while fetching category distribution: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_stats(request):
+    """
+    Get statistics for the lecturer dashboard
+    """
+    try:
+        from django.utils import timezone
+        from datetime import timedelta
+        
+        # Get the current user
+        user = request.user
+        
+        # Calculate date thresholds
+        now = timezone.now()
+        week_ago = now - timedelta(days=7)
+        
+        # Get assigned issues count
+        assigned_count = Issue.objects.filter(assignee=user).count()
+        
+        # Calculate response rate (issues responded to within 24 hours)
+        total_issues = Issue.objects.filter(assignee=user).count()
+        responded_issues = Issue.objects.filter(
+            assignee=user,
+            created_at__lte=now - timedelta(hours=24)
+        ).exclude(
+            comments__isnull=True
+        ).distinct().count()
+        
+        response_rate = (responded_issues / total_issues * 100) if total_issues > 0 else 0
+        
+        # Get resolved issues this week
+        resolved_this_week = Issue.objects.filter(
+            assignee=user,
+            status__name__iexact='resolved',
+            resolved_at__gte=week_ago
+        ).count()
+        
+        # Get SLA breaches (issues past due date)
+        sla_breaches = Issue.objects.filter(
+            assignee=user,
+            due_date__lt=now,
+            status__name__in=['open', 'pending', 'in_progress']
+        ).count()
+        
+        return Response({
+            'assigned': assigned_count,
+            'responseRate': round(response_rate, 1),
+            'resolvedThisWeek': resolved_this_week,
+            'slaBreaches': sla_breaches
+        })
+        
+    except Exception as e:
+        return Response(
+            {"error": f"An error occurred while fetching stats: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def upload_attachment(request):
@@ -304,3 +588,147 @@ def upload_attachment(request):
     
     serializer = AttachmentSerializer(attachment)
     return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
+def issue_comments(request, pk):
+    """
+    Handle both getting and posting comments for an issue
+    """
+    issue = get_object_or_404(Issue, pk=pk)
+    
+    if request.method == 'GET':
+        comments = Comment.objects.filter(issue=issue)
+        serializer = CommentSerializer(comments, many=True)
+        return Response(serializer.data)
+    
+    elif request.method == 'POST':
+        # Add the current user and issue to the comment data
+        comment_data = request.data.copy()
+        comment_data['user'] = request.user.user_id
+        comment_data['issue'] = issue.issue_id
+        
+        serializer = CommentSerializer(data=comment_data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def create_category(request):
+    """
+    Create a new category
+    """
+    serializer = CategorySerializer(data=request.data)
+    if serializer.is_valid():
+        serializer.save()
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+@api_view(['GET', 'PUT'])
+@permission_classes([IsAuthenticated])
+def update_category(request, pk):
+    """
+    Update a category
+    """
+    try:
+        category = Category.objects.get(category_id=pk)
+    except Category.DoesNotExist:
+        return Response(status=status.HTTP_404_NOT_FOUND)
+    
+    if request.method == 'GET':
+        serializer = CategorySerializer(category)
+        return Response(serializer.data)
+    
+    serializer = CategorySerializer(category, data=request.data)
+    if serializer.is_valid():
+        serializer.save()
+        return Response(serializer.data)
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def delete_category(request, pk):
+    """
+    Delete a category
+    """
+    try:
+        category = Category.objects.get(category_id=pk)
+    except Category.DoesNotExist:
+        return Response(status=status.HTTP_404_NOT_FOUND)
+    
+    # Check if the category has associated issues
+    issue_count = category.issues.count()
+    if issue_count > 0:
+        return Response(
+            {"error": f"Cannot delete category. It has {issue_count} associated issues."},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    category.delete()
+    return Response(status=status.HTTP_204_NO_CONTENT)
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_student_notifications(request):
+    """
+    Get notifications for the current student
+    """
+    try:
+        notifications = Notification.objects.filter(
+            user=request.user,
+            issue__reporter=request.user
+        ).order_by('-created_at')
+        
+        # Format the notifications for the frontend
+        formatted_notifications = [{
+            'id': notification.notification_id,
+            'title': notification.type,
+            'message': notification.message,
+            'type': 'info',
+            'timestamp': notification.created_at.strftime('%Y-%m-%d %I:%M %p'),
+            'read': notification.is_read
+        } for notification in notifications]
+        
+        return Response(formatted_notifications)
+    except Exception as e:
+        print(f"Error fetching student notifications: {str(e)}")
+        return Response(
+            {"error": f"An error occurred while fetching notifications: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@api_view(['PUT'])
+@permission_classes([IsAuthenticated])
+def mark_notification_read(request, notification_id):
+    """
+    Mark a notification as read
+    """
+    try:
+        notification = get_object_or_404(Notification, notification_id=notification_id, user=request.user)
+        notification.is_read = True
+        notification.save()
+        return Response({"message": "Notification marked as read"})
+    except Exception as e:
+        print(f"Error marking notification as read: {str(e)}")
+        return Response(
+            {"error": f"An error occurred while marking notification as read: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@api_view(['PUT'])
+@permission_classes([IsAuthenticated])
+def mark_all_notifications_read(request):
+    """
+    Mark all notifications as read for the current user
+    """
+    try:
+        Notification.objects.filter(user=request.user, is_read=False).update(is_read=True)
+        return Response({"message": "All notifications marked as read"})
+    except Exception as e:
+        print(f"Error marking all notifications as read: {str(e)}")
+        return Response(
+            {"error": f"An error occurred while marking all notifications as read: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )

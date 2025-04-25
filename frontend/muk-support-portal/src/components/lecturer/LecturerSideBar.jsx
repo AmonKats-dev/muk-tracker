@@ -4,10 +4,8 @@ import { AuthContext } from '../../context/AuthContext'
 import {
   HomeIcon,
   TicketIcon,
-  ClipboardDocumentListIcon,
   ChatBubbleLeftRightIcon,
   BellIcon,
-  ChartBarIcon,
   Cog6ToothIcon,
   ArrowLeftOnRectangleIcon
 } from '@heroicons/react/24/outline'
@@ -19,10 +17,8 @@ const LecturerSidebar = () => {
   const navigation = [
     { name: 'Dashboard', href: '/lecturer', icon: HomeIcon },
     { name: 'Assigned Issues', href: '/lecturer/assigned', icon: TicketIcon },
-    { name: 'Department Issues', href: '/lecturer/department', icon: ClipboardDocumentListIcon },
     { name: 'Messages', href: '/lecturer/messages', icon: ChatBubbleLeftRightIcon },
     { name: 'Notifications', href: '/lecturer/notifications', icon: BellIcon },
-    { name: 'Reports', href: '/lecturer/reports', icon: ChartBarIcon },
     { name: 'Settings', href: '/lecturer/settings', icon: Cog6ToothIcon },
     { name: 'Logout', href: '/logout', icon: ArrowLeftOnRectangleIcon }
   ]
@@ -36,12 +32,12 @@ const LecturerSidebar = () => {
             {user?.name?.split(' ').map(n => n[0]).join('')}
           </div>
           <div>
-            <h2 className="font-semibold">{user?.name || 'Dr. Patricia Lee'}</h2>
+            <h2 className="font-semibold">{user?.name || 'Dr. Peter Wakholi'}</h2>
             <p className="text-sm text-gray-300">{user?.department || 'Computer Science'}</p>
           </div>
         </div>
         <div className="mt-4 text-sm text-gray-300">
-          Faculty ID: {user?.facultyId || 'F9876543'}
+          College ID: {user?.facultyId || 'F9876543'}
         </div>
       </div>
 
